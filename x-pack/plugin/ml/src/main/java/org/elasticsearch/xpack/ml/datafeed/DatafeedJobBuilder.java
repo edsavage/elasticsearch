@@ -115,6 +115,9 @@ public class DatafeedJobBuilder {
                 parentTaskAssigningClient,
                 xContentRegistry
             );
+            CrossProjectSearchStats crossProjectSearchStats = new CrossProjectSearchStats(
+                () -> java.time.Instant.ofEpochMilli(currentTimeSupplier.get())
+            );
             DatafeedJob datafeedJob = new DatafeedJob(
                 job.getId(),
                 buildDataDescription(job),
@@ -131,7 +134,8 @@ public class DatafeedJobBuilder {
                 latestFinalBucketEndMs,
                 latestRecordTimeMs,
                 context.restartTimeInfo().haveSeenDataPreviously(),
-                delayedDataCheckFreq
+                delayedDataCheckFreq,
+                crossProjectSearchStats
             );
 
             listener.onResponse(datafeedJob);
