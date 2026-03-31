@@ -31,6 +31,7 @@ import org.elasticsearch.action.support.master.AcknowledgedRequest;
 import org.elasticsearch.client.internal.ParentTaskAssigningClient;
 import org.elasticsearch.cluster.block.ClusterBlockLevel;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
+import org.elasticsearch.cluster.metadata.ProjectId;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.logging.LoggerMessageFormat;
@@ -80,6 +81,7 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.elasticsearch.core.Strings.format;
 
@@ -92,6 +94,8 @@ class ClientTransformIndexer extends TransformIndexer {
     private final ClusterService clusterService;
     private final IndexNameExpressionResolver indexNameExpressionResolver;
     private final Settings destIndexSettings;
+    private final boolean crossProjectEnabled;
+    private final Function<ProjectId, Boolean> hasLinkedProjects;
     private final AtomicBoolean oldStatsCleanedUp = new AtomicBoolean(false);
 
     private final AtomicReference<SeqNoPrimaryTermAndIndex> seqNoPrimaryTermAndIndexHolder;
@@ -141,6 +145,9 @@ class ClientTransformIndexer extends TransformIndexer {
         context.setShouldStopAtCheckpoint(shouldStopAtCheckpoint);
 
         disablePit = TransformEffectiveSettings.isPitDisabled(transformConfig.getSettings());
+        crossProjectEnabled = transformServices.crossProjectModeDecider().crossProjectEnabled()
+            && TransformConfig.TRANSFORM_CROSS_PROJECT.isEnabled();
+        this.hasLinkedProjects = transformServices.hasLinkedProjects();
     }
 
     @Override
@@ -520,6 +527,11 @@ class ClientTransformIndexer extends TransformIndexer {
     @Override
     protected void onStop() {
         closePointInTime(super::onStop);
+    }
+
+    @Override
+    protected void onAbort() {
+        closePointInTime(super::onAbort);
     }
 
     // visible for testing

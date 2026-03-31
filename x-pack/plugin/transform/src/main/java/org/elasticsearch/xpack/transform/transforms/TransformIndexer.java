@@ -101,6 +101,7 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
     protected final TransformConfigManager transformsConfigManager;
     private final CheckpointProvider checkpointProvider;
     protected final TransformFailureHandler failureHandler;
+    private final IndicesOptions strictIndicesOptions;
     private volatile float docsPerSecond = -1;
 
     protected final TransformAuditor auditor;
@@ -162,6 +163,11 @@ public abstract class TransformIndexer extends AsyncTwoPhaseIndexer<TransformInd
         this.lastCheckpoint = ExceptionsHelper.requireNonNull(lastCheckpoint, "lastCheckpoint");
         this.nextCheckpoint = ExceptionsHelper.requireNonNull(nextCheckpoint, "nextCheckpoint");
         this.context = ExceptionsHelper.requireNonNull(context, "context");
+        ExceptionsHelper.requireNonNull(transformServices.crossProjectModeDecider(), "crossProjectModeDecider");
+        this.strictIndicesOptions = transformServices.crossProjectModeDecider().crossProjectEnabled()
+            && TransformConfig.TRANSFORM_CROSS_PROJECT.isEnabled()
+                ? SearchRequest.DEFAULT_CPS_INDICES_OPTIONS
+                : SearchRequest.DEFAULT_INDICES_OPTIONS;
         // give runState a default
         this.runState = RunState.APPLY_RESULTS;
 
