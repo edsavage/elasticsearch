@@ -17,6 +17,7 @@ import org.elasticsearch.compute.operator.DriverCompletionInfo;
 import org.elasticsearch.compute.test.ComputeTestCase;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasables;
+import org.elasticsearch.tasks.TaskCancelledException;
 import org.elasticsearch.xpack.esql.EsqlTestUtils;
 import org.elasticsearch.xpack.esql.core.expression.Attribute;
 import org.elasticsearch.xpack.esql.core.expression.ReferenceAttribute;
@@ -32,6 +33,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.elasticsearch.test.MapMatcher.matchesMap;
 import static org.hamcrest.Matchers.contains;
@@ -257,8 +259,44 @@ public class ExpandUnmappedFieldsPostProcessorTests extends ComputeTestCase {
         assertThat("expand leaked the input pages on failure", bf.breaker().getUsed(), equalTo(0L));
     }
 
+    public void testCancellationDuringExpansionThrowsAndReleasesPages() {
+        BlockFactory bf = blockFactory();
+        Result result = result(
+            List.of(intAttr(), unmappedAttr()),
+            List.of(page(bf, List.of(row(1, jsonObject("{'pet':'Rex'}")))), page(bf, List.of(row(2, jsonObject("{'pet':'Max'}")))))
+        );
+        assertThat("input pages should reserve breaker memory before expand runs", bf.breaker().getUsed(), greaterThan(0L));
+
+        // Stands in for a task cancelled mid-expansion: the checker throws as soon as the expansion polls it.
+        Runnable cancelled = () -> { throw new TaskCancelledException("cancelled"); };
+        expectThrows(
+            TaskCancelledException.class,
+            () -> ExpandUnmappedFieldsPostProcessor.expand(result, bf, PlannerSettings.DEFAULTS, cancelled)
+        );
+
+        // expand must release the input pages on the cancellation path, just as it does for any other failure.
+        assertThat("expand leaked pages when cancelled", bf.breaker().getUsed(), equalTo(0L));
+    }
+
+    public void testExpansionPollsForCancellation() {
+        BlockFactory bf = blockFactory();
+        Result result = result(
+            List.of(intAttr(), unmappedAttr()),
+            List.of(page(bf, List.of(row(1, jsonObject("{'pet':'Rex'}")))), page(bf, List.of(row(2, jsonObject("{'pet':'Max'}")))))
+        );
+
+        // Guards the wiring: collectFieldNames and rewritePages both poll at least once per page, so expansion must poll the checker.
+        AtomicInteger checks = new AtomicInteger();
+        Result expanded = ExpandUnmappedFieldsPostProcessor.expand(result, bf, PlannerSettings.DEFAULTS, checks::incrementAndGet);
+        try {
+            assertThat(checks.get(), greaterThan(0));
+        } finally {
+            Releasables.close(expanded.pages());
+        }
+    }
+
     private static Result expand(Result result, BlockFactory blockFactory) {
-        return ExpandUnmappedFieldsPostProcessor.expand(result, blockFactory, PlannerSettings.DEFAULTS);
+        return ExpandUnmappedFieldsPostProcessor.expand(result, blockFactory, PlannerSettings.DEFAULTS, () -> {});
     }
 
     private static Result result(List<Attribute> schema, List<Page> pages) {

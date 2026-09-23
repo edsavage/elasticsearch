@@ -562,7 +562,10 @@ public class TransportEsqlQueryAction extends HandledTransportAction<EsqlQueryRe
         var result = ExpandUnmappedFieldsPostProcessor.expand(
             rawResult,
             services.blockFactoryProvider().blockFactory(),
-            services.plannerSettings().get()
+            services.plannerSettings().get(),
+            // Coordinator-side expansion can run for seconds on wide/high-row LOAD_ALL results; poll the task so a cancellation
+            // (async DELETE, keep_alive expiry, client disconnect) is honored during expansion instead of only after it finishes.
+            ((CancellableTask) task)::ensureNotCancelled
         );
         // A lenient external read (e.g. a max_record_size truncation under a non-strict error_mode) returns fewer
         // records than the source held. Surface that as is_partial on the response — the structured counterpart of

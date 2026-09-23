@@ -51,15 +51,41 @@ import java.util.TreeSet;
  */
 class ExpandUnmappedFieldsPostProcessor {
     /**
+     * How often the expansion loops poll {@code checkCancelled}. The expansion is a coordinator-side, single-threaded scan over
+     * every row of every page (parsing each row's {@code _source} JSON), so for a wide or high-row {@code LOAD_ALL} result it can run
+     * for seconds. Polling every {@value} rows keeps cancellation latency to a small fraction of a page while adding no measurable
+     * overhead per row (the check is a volatile read). Must stay a power of two for the bit-mask test below.
+     */
+    private static final int ROWS_PER_CANCELLATION_CHECK = 1024;
+
+    /**
+     * Test-only seam invoked once at the start of the expansion phase — after a {@code _unmapped_fields} column has been confirmed
+     * present but before any page is scanned. Production never installs a hook (the field stays {@code null}), so this adds a single
+     * volatile read per {@code LOAD_ALL} response and nothing otherwise. The cancellation integration test installs a hook that blocks
+     * until it has cancelled the task, which lets it deterministically land a cancellation inside an in-progress expansion (rather than
+     * during the compute phase, where the drivers would abort first) and assert that the per-row {@link #ROWS_PER_CANCELLATION_CHECK}
+     * poll then aborts it. Volatile so the coordinator thread running the expansion observes the test's write.
+     */
+    static volatile Runnable expansionStartedForTest = null;
+
+    /**
      * Expands the {@code _unmapped_fields} column in {@code result} into per-field columns.
      * Returns {@code result} unchanged if no {@link UnmappedFieldsAttribute} is present in the schema.
+     *
+     * @param checkCancelled polled periodically during the (potentially long) expansion so the query can be cancelled promptly;
+     *                       it should throw (e.g. {@link org.elasticsearch.tasks.CancellableTask#ensureNotCancelled()}) if the task
+     *                       has been cancelled. On such a throw {@code expand} releases the input and any partially built pages.
      */
-    static Result expand(Result result, BlockFactory blockFactory, PlannerSettings plannerSettings) {
+    static Result expand(Result result, BlockFactory blockFactory, PlannerSettings plannerSettings, Runnable checkCancelled) {
         List<Attribute> schema = result.schema();
 
         int unmappedIdx = CollectionUtils.findIndex(schema, e -> e instanceof UnmappedFieldsAttribute);
         if (unmappedIdx == -1) {
             return result;
+        }
+        Runnable expansionStarted = expansionStartedForTest;
+        if (expansionStarted != null) {
+            expansionStarted.run();
         }
         double reservationFactor = plannerSettings.sourceReservationFactor();
 
@@ -68,12 +94,12 @@ class ExpandUnmappedFieldsPostProcessor {
         boolean success = false;
         try {
             // Converting the SortedSet to an ArrayList for faster iteration.
-            var fieldNames = collectFieldNames(result, unmappedIdx, blockFactory.breaker(), reservationFactor);
+            var fieldNames = collectFieldNames(result, unmappedIdx, blockFactory.breaker(), reservationFactor, checkCancelled);
             List<String> sortedFieldNames = new ArrayList<>(fieldNames);
             // TODO account for newSchema's field names against the circuit breaker. A wide _source turns into a wide schema, and
             // unlike the pages, the response schema has no breaker-tracked lifetime to release it against today.
             List<Attribute> newSchema = buildSchema(schema, unmappedIdx, sortedFieldNames);
-            List<Page> newPages = rewritePages(result, unmappedIdx, sortedFieldNames, blockFactory, reservationFactor);
+            List<Page> newPages = rewritePages(result, unmappedIdx, sortedFieldNames, blockFactory, reservationFactor, checkCancelled);
 
             Result expanded = new Result(
                 newSchema,
@@ -101,12 +127,21 @@ class ExpandUnmappedFieldsPostProcessor {
      * TODO walk the JSON with a parser instead of materialising a whole {@code Map} only to read its {@code keySet()}. That would
      *  also make the reservation below unnecessary.
      */
-    private static SortedSet<String> collectFieldNames(Result result, int unmappedIdx, CircuitBreaker breaker, double reservationFactor) {
+    private static SortedSet<String> collectFieldNames(
+        Result result,
+        int unmappedIdx,
+        CircuitBreaker breaker,
+        double reservationFactor,
+        Runnable checkCancelled
+    ) {
         TreeSet<String> fieldNames = new TreeSet<>();
         BytesRef scratch = new BytesRef();
         for (Page page : result.pages()) {
             BytesRefBlock unmappedBlock = page.getBlock(unmappedIdx);
             for (int row = 0; row < unmappedBlock.getPositionCount(); row++) {
+                if ((row & (ROWS_PER_CANCELLATION_CHECK - 1)) == 0) {
+                    checkCancelled.run();
+                }
                 if (unmappedBlock.isNull(row)) {
                     continue;
                 }
@@ -169,14 +204,15 @@ class ExpandUnmappedFieldsPostProcessor {
         int unmappedIdx,
         List<String> fieldNames,
         BlockFactory factory,
-        double reservationFactor
+        double reservationFactor,
+        Runnable checkCancelled
     ) {
         int originalColumnCount = result.schema().size();
         var newPages = new ArrayList<Page>(result.pages().size());
         var success = false;
         try {
             for (Page p : result.pages()) {
-                newPages.add(rewritePage(unmappedIdx, fieldNames, factory, p, originalColumnCount, reservationFactor));
+                newPages.add(rewritePage(unmappedIdx, fieldNames, factory, p, originalColumnCount, reservationFactor, checkCancelled));
             }
             success = true;
             return newPages;
@@ -193,7 +229,8 @@ class ExpandUnmappedFieldsPostProcessor {
         BlockFactory blockFactory,
         Page page,
         int originalColumnCount,
-        double reservationFactor
+        double reservationFactor,
+        Runnable checkCancelled
     ) {
         // Output blocks are the retained columns (all but _unmapped_fields) followed by one expanded column per field name
         // collectFieldNames found, so fieldNames.size() is the single source for the expansion width.
@@ -223,6 +260,9 @@ class ExpandUnmappedFieldsPostProcessor {
                 var scratch = new BytesRefBuilder();
                 CircuitBreaker breaker = blockFactory.breaker();
                 for (int row = 0; row < page.getPositionCount(); row++) {
+                    if ((row & (ROWS_PER_CANCELLATION_CHECK - 1)) == 0) {
+                        checkCancelled.run();
+                    }
                     if (unmappedBlock.isNull(row)) {
                         appendRow(Map.of(), fieldNames, builders, scratch);
                         continue;
