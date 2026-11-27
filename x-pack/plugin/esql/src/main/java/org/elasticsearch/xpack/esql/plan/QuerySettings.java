@@ -129,7 +129,7 @@ public final class QuerySettings {
         - `LOAD_ALL` : Does everything `LOAD` does, and also returns all unmapped fields in a
           single `_unmapped_fields` column. That column holds, for each row, a JSON object of the row's unmapped `_source` fields.
           Refer to [Load all unmapped fields](/reference/query-languages/esql/esql-unmapped-fields.md#esql-unmapped-fields-load-all).
-          {applies_to}`stack: preview 9.6+` {applies_to}`serverless: preview`
+          {applies_to}`stack: preview =9.6, ga 9.7+` {applies_to}`serverless: ga`
 
         [`PROMQL`](/reference/query-languages/esql/commands/promql.md) queries have their own specific semantics for unmapped fields.
 
@@ -138,15 +138,15 @@ public final class QuerySettings {
         - Referencing subfields of `flattened` parents is not supported.
         - `LOAD_ALL` supports a subset of commands.
           Other commands fail with an error that lists the supported ones.
-          {applies_to}`stack: preview 9.6+` {applies_to}`serverless: preview`
+          {applies_to}`stack: preview =9.6, ga 9.7+` {applies_to}`serverless: ga`
         - `LOAD_ALL` is not supported in a view definition, and the setting stops at a view's boundary.
           Refer to [Limitations specific to
           `LOAD_ALL`](/reference/query-languages/esql/esql-unmapped-fields.md#esql-unmapped-fields-load-all-limitations).
-          {applies_to}`stack: preview 9.6+` {applies_to}`serverless: preview`
+          {applies_to}`stack: preview =9.6, ga 9.7+` {applies_to}`serverless: ga`
         - `_unmapped_fields` is not a reserved name. If the query already has a column named `_unmapped_fields`, because the query
           refers to or creates it, or because a view outputs it, that column is used instead and the unmapped fields are not
           returned in it.
-          {applies_to}`stack: preview 9.6+` {applies_to}`serverless: preview`
+          {applies_to}`stack: preview =9.6, ga 9.7+` {applies_to}`serverless: ga`
         - [Full-text search functions](/reference/query-languages/esql/functions-operators/search-functions.md) are supported,
           although unmapped fields cannot be loaded without an explicit invocation of `to_text`.
           {applies_to}`stack: ga 9.5+`

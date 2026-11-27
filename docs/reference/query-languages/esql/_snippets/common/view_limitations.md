@@ -118,7 +118,7 @@ Only the following settings are supported in a view definition:
 | [`wildcards_match_views`](/reference/query-languages/esql/directives/set.md#esql-wildcards_match_views) | `true` and `false` |
 | [`wildcards_match_datasets`](/reference/query-languages/esql/directives/set.md#esql-wildcards_match_datasets) {applies_to}`stack: preview 9.6+` {applies_to}`serverless: preview` | `true` and `false` |
 
-{applies_to}`{"stack": "preview 9.6+", "serverless": "preview"}` `LOAD_ALL`
+{applies_to}`{"stack": "preview =9.6, ga 9.7+", "serverless": "ga"}` `LOAD_ALL`
 is not supported in a view definition.
 
 All other settings, including `time_zone`, are rejected in a view definition.
